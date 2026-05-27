@@ -1,0 +1,28 @@
+import torch
+import subprocess
+import sys
+
+print("="*40)
+print("1. PyTorch 基本信息")
+print("-"*40)
+print(f"PyTorch 版本: {torch.__version__}")
+
+# 最关键：检查PyTorch编译时是否带了CUDA支持
+print(f"PyTorch 编译时的CUDA版本: {torch.version.cuda}") # <-- 如果是None，就是CPU版本
+
+print(f"CUDA是否可用: {torch.cuda.is_available()}")
+
+print("\n" + "="*40)
+print("2. 显卡驱动状态")
+print("-"*40)
+# 调用系统命令查看驱动
+result = subprocess.run(['nvidia-smi'], capture_output=True, text=True)
+if result.returncode == 0:
+    # 如果能成功运行，从中读取驱动版本和支持的最高CUDA版本
+    for line in result.stdout.split('\n'):
+        if 'Driver Version' in line:
+            print(f"驱动版本: {line.strip()}")
+        elif 'CUDA Version' in line:
+            print(f"驱动支持的最高CUDA版本: {line.strip()}")
+else:
+    print("❌ nvidia-smi 命令失败，说明NVIDIA驱动未正确安装。")
