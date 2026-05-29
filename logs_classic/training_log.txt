@@ -1,0 +1,2 @@
+Epoch,Train_Loss,Train_MSE,Train_RelMSE,Train_Peak,Train_Corr,Val_Loss,Val_MSE,Val_RelMSE,Val_Peak,Val_Corr,LR,Input_SNR,Output_SNR,SNR_Improvement,Memory_Percent
+1,10.913762,0.410033,17.790663,0.428765,1.111465,10.473178,0.401299,16.842541,0.420134,1.098151,2.00e-04,0.00,0.00,0.00,61.7

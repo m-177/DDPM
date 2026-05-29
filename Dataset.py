@@ -11,7 +11,8 @@ import os
 # -----------------------------
 class Dataset_UWB(Dataset):
     def __init__(self, clean_path, split='train',
-                 norm_stats=None, val_ratio=0.1, test_ratio=0.1):
+                 norm_stats=None, val_ratio=0.1, test_ratio=0.1,
+                 pad_size=128):
         """
         Args:
             clean_path: 干净数据路径 (npy文件，形状: [N, L] 或 [N, 1, L])
@@ -19,6 +20,7 @@ class Dataset_UWB(Dataset):
             norm_stats: 归一化统计量 (min, max)，用于验证/测试集
             val_ratio: 验证集比例
             test_ratio: 测试集比例
+            pad_size: 镜像padding大小（首尾各延拓点数，默认128）
         """
 
         # -----------------------------
@@ -72,9 +74,18 @@ class Dataset_UWB(Dataset):
         # -----------------------------
         self.clean = 2 * (self.clean - self.clean_min) / (self.clean_max - self.clean_min + 1e-8) - 1
 
+        # -----------------------------
+        # 步骤5: 镜像padding（解决UNet边界效应）
+        # -----------------------------
+        self.pad_size = pad_size
+        # 对时间轴（最后一维）做镜像反射padding
+        self.clean = np.pad(self.clean, ((0, 0), (0, 0), (pad_size, pad_size)), mode='reflect')
+        self.original_length = self.clean.shape[-1] - 2 * pad_size
+
         print(f"UWB {split}集加载完成，共{len(self)}个样本")
         print(f"  - 数据形状: {self.clean.shape}")
         print(f"  - 数据范围: [{self.clean.min():.4f}, {self.clean.max():.4f}]")
+        print(f"  - 镜像padding: 首尾各{pad_size}点 (原始长度{self.original_length}, 填充后{self.clean.shape[-1]})")
 
     def get_norm_stats(self):
         """返回归一化参数，用于验证/测试集"""

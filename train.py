@@ -294,8 +294,8 @@ def combined_loss(pred_clean, target_clean, pred_noise=None, target_noise=None,
     peak_loss_val = peak_aware_loss(pred_clean, target_clean, alpha=1.5)
     corr_loss_val = peak_correlation_loss(pred_clean, target_clean, polarity_weight=1.2)
 
-    total_loss = (lambda_mse * mse_loss_val + 
-                  lambda_rel * rel_loss_val + 
+    total_loss = (lambda_mse * mse_loss_val +
+                  lambda_rel * rel_loss_val +
                   lambda_peak * peak_loss_val +
                   lambda_corr * corr_loss_val)
 
@@ -545,7 +545,7 @@ def save_checkpoint(epoch, model, optimizer, scheduler, ema_model=None,
                     train_losses=None, val_losses=None, lr_history=None,
                     epochs=None, snr_improvements=None, snr_epochs=None,
                     memory_usages=None, best_val_loss=None, best_snr_improvement=None,
-                    best_epoch=None, loss_early_stopping=None, snr_early_stopping=None,
+                    best_epoch=None, loss_early_stopping=None,
                     memory_monitor=None, params=None, is_pause=False):
     """
     保存完整的训练检查点，支持暂停保存和定期保存
@@ -575,12 +575,6 @@ def save_checkpoint(epoch, model, optimizer, scheduler, ema_model=None,
         checkpoint['loss_early_stopping'] = {
             'counter': loss_early_stopping.counter,
             'best_value': loss_early_stopping.best_value,
-        }
-
-    if snr_early_stopping is not None:
-        checkpoint['snr_early_stopping'] = {
-            'counter': snr_early_stopping.counter,
-            'best_value': snr_early_stopping.best_value,
         }
 
     if memory_monitor is not None:
@@ -700,14 +694,6 @@ class LossEarlyStopping(EarlyStopping):
         self.name = 'Val_Loss'
 
 
-class SNREarlyStopping(EarlyStopping):
-    """基于SNR提升的早停（越大越好）"""
-    def __init__(self, patience=30, min_delta=0.05):
-        super().__init__(patience=patience, min_delta=min_delta)
-        self.mode = 'max'
-        self.name = 'SNR_Improvement'
-
-
 
 # -----------------------------
 # 8. 可视化去噪结果
@@ -720,7 +706,7 @@ def visualize_denoising(model, test_loader, params, device,
     model.eval()
 
     # 评估时间步（中等噪声水平）
-    eval_t = 300
+    eval_t = 200
 
     # 存储结果
     results = []
@@ -885,7 +871,8 @@ def train(
         clean_path=clean_path,
         split='train',
         val_ratio=val_ratio,
-        test_ratio=test_ratio
+        test_ratio=test_ratio,
+        pad_size=128
     )
 
     norm_stats = train_dataset.get_norm_stats()
@@ -895,7 +882,8 @@ def train(
         split='val',
         norm_stats=norm_stats,
         val_ratio=val_ratio,
-        test_ratio=test_ratio
+        test_ratio=test_ratio,
+        pad_size=128
     )
 
     test_dataset = Dataset_UWB(
@@ -903,7 +891,8 @@ def train(
         split='test',
         norm_stats=norm_stats,
         val_ratio=val_ratio,
-        test_ratio=test_ratio
+        test_ratio=test_ratio,
+        pad_size=128
     )
 
     # 修改点1: train_loader 增加 num_workers 和 pin_memory
@@ -961,7 +950,10 @@ def train(
 
     # 优化器 - 添加权重衰减正则化
     optimizer = Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+    # 学习率调度器：初始时不启动，当损失下降小于0.1时才开始
     scheduler = CosineAnnealingLR(optimizer, T_max=200, eta_min=1e-6)
+    scheduler_started = False  # 标记调度器是否已启动
+    prev_val_loss = None       # 上一轮的验证损失
 
 
     # Beta调度
@@ -988,9 +980,11 @@ def train(
         "Val_Loss,Val_MSE,Val_RelMSE,Val_Peak,Val_Corr,"
         "LR,Input_SNR,Output_SNR,SNR_Improvement,Memory_Percent\n")
 
-    # 创建图表（交互模式，但只在snr_eval_freq轮时刷新窗口，降低弹窗频率）
+    # 创建图表（交互模式，每一轮更新数据，每10轮刷新一次窗口）
     plt.ion()
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
+    fig.canvas.draw()
+    fig.canvas.flush_events()
 
     train_losses = []
     val_losses = []
@@ -1038,8 +1032,7 @@ def train(
     best_val_loss = float('inf')
     best_snr_improvement = -float('inf')
     best_epoch = -1
-    loss_early_stopping = LossEarlyStopping(patience=30, min_delta=1e-4)
-    snr_early_stopping = SNREarlyStopping(patience=30, min_delta=0.05)
+    loss_early_stopping = LossEarlyStopping(patience=20, min_delta=0.05)
 
     # 如果指定了resume_from，尝试从检查点恢复
     if resume_from is not None:
@@ -1071,11 +1064,6 @@ def train(
             if es_loss is not None:
                 loss_early_stopping.counter = es_loss.get('counter', 0)
                 loss_early_stopping.best_value = es_loss.get('best_value')
-
-            es_snr = checkpoint_data.get('snr_early_stopping')
-            if es_snr is not None:
-                snr_early_stopping.counter = es_snr.get('counter', 0)
-                snr_early_stopping.best_value = es_snr.get('best_value')
 
             # 恢复EMA步数
             if use_ema and 'ema_state_dict' in checkpoint_data:
@@ -1208,8 +1196,17 @@ def train(
         avg_val_peak = epoch_val_peak / len(val_loader)
         avg_val_corr = epoch_val_corr / len(val_loader)
 
-        # 更新学习率
-        scheduler.step()
+        # 学习率调度：当损失下降小于0.1时才开始启动调度器
+        if not scheduler_started:
+            if prev_val_loss is not None:
+                loss_drop = prev_val_loss - avg_val_loss
+                if loss_drop < 0.1:  # 损失下降小于0.1，启动调度器
+                    scheduler_started = True
+                    print(f"  [LR Scheduler] 损失下降({loss_drop:.4f}) < 0.1，启动学习率调度")
+            prev_val_loss = avg_val_loss
+        
+        if scheduler_started:
+            scheduler.step()
         current_lr = optimizer.param_groups[0]['lr']
 
         train_losses.append(avg_train_loss)
@@ -1251,7 +1248,7 @@ def train(
             output_snrs = []
             improvements = []
 
-            eval_ts = [200, 250,300,350,400]
+            eval_ts = [100, 150,200,250,300]
             num_eval_samples = 5
 
             with torch.no_grad():
@@ -1335,7 +1332,7 @@ def train(
             print(f"  SNR Imp:    {avg_snr_improvement:+.2f} dB")
         print(f"  Memory:     {current_mem:.1f}%")
 
-        # 保存最佳模型
+    # 保存最佳模型
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             best_epoch = epoch
@@ -1373,22 +1370,10 @@ def train(
                 'snr_improvement': avg_snr_improvement,
             }, f"./saved_models_classic/model_epoch{epoch}.pth")
 
-        # 早停检查（并行：Val_Loss 或 SNR 任一触发即停止）
-        stop_training = False
-        stop_reasons = []
-
+        # 早停检查
         if loss_early_stopping.check(avg_val_loss):
-            stop_reasons.append(f"Val_Loss 连续 {loss_early_stopping.patience} 轮未改善 (最佳: {loss_early_stopping.best_value:.6f})")
-
-        # SNR早停只在有SNR评估的epoch才检查
-        if avg_snr_improvement != 0:
-            if snr_early_stopping.check(avg_snr_improvement):
-                stop_reasons.append(f"SNR_Improvement 连续 {snr_early_stopping.patience} 轮未改善 (最佳: {snr_early_stopping.best_value:.2f}dB)")
-
-        if stop_reasons:
             print(f"\n⚠️ 早停于 epoch {epoch}")
-            for reason in stop_reasons:
-                print(f"  原因: {reason}")
+            print(f"  原因: Val_Loss 连续 {loss_early_stopping.patience} 轮未改善 (最佳: {loss_early_stopping.best_value:.6f})")
             break
 
 
@@ -1407,22 +1392,192 @@ def train(
     print(f"最佳SNR提升: {best_snr_improvement:.2f} dB")
     print("=" * 60)
 
-    # 加载最佳模型进行可视化
-    print("\n加载最佳模型进行去噪可视化...")
+    # 加载最佳模型进行综合评估与分析
+    print("\n" + "=" * 60)
+    print("加载最佳模型，进行综合评估与分析...")
+    print("=" * 60)
     best_model = SimpleUNet1D_Classic(in_channels=1, out_channels=1, dropout_rate=dropout_rate).to(device)
     checkpoint = torch.load("./saved_models_classic/best_model_by_loss.pth", map_location=device)
     best_model.load_state_dict(checkpoint['model_state_dict'])
     best_model.eval()
 
+    # ---- 对全部测试集进行去噪评估 ----
+    eval_t = 300
+    result_data = {
+        'best_epoch': best_epoch,
+        'best_val_loss': best_val_loss,
+        'best_snr_improvement': best_snr_improvement,
+        'clean_signals': [],
+        'noisy_signals': [],
+        'denoised_signals': [],
+        'input_snrs': [],
+        'output_snrs': [],
+        'eval_t': eval_t,
+    }
+
+    all_mse = []
+    all_correlation = []
+
+    with torch.no_grad():
+        set_seed(42)
+        for batch_clean in test_loader:
+            batch_clean = batch_clean.to(device, non_blocking=True)
+            for i in range(batch_clean.shape[0]):
+                clean_sample = batch_clean[i:i + 1]
+
+                alpha_bar = alphas_cumprod[eval_t].view(-1, 1, 1)
+                noise = torch.randn_like(clean_sample)
+                noisy = torch.sqrt(alpha_bar) * clean_sample + torch.sqrt(1 - alpha_bar) * noise
+
+                denoised = denoise_for_eval(best_model, noisy, eval_t, params, device)
+
+                input_snr = calculate_snr(clean_sample[0].cpu(), noisy[0].cpu())
+                output_snr = calculate_snr(clean_sample[0].cpu(), denoised[0].cpu())
+
+                clean_np = clean_sample[0, 0].cpu().numpy()
+                denoised_np = denoised[0, 0].cpu().numpy()
+
+                result_data['clean_signals'].append(clean_np)
+                result_data['noisy_signals'].append(noisy[0, 0].cpu().numpy())
+                result_data['denoised_signals'].append(denoised_np)
+                result_data['input_snrs'].append(input_snr)
+                result_data['output_snrs'].append(output_snr)
+
+                # 计算 MSE 和相关系数
+                mse_val = np.mean((clean_np - denoised_np) ** 2)
+                all_mse.append(mse_val)
+                corr_val = np.corrcoef(clean_np, denoised_np)[0, 1]
+                all_correlation.append(corr_val)
+
+    result_data['clean_signals'] = np.array(result_data['clean_signals'])
+    result_data['noisy_signals'] = np.array(result_data['noisy_signals'])
+    result_data['denoised_signals'] = np.array(result_data['denoised_signals'])
+    result_data['input_snrs'] = np.array(result_data['input_snrs'])
+    result_data['output_snrs'] = np.array(result_data['output_snrs'])
+    all_mse = np.array(all_mse)
+    all_correlation = np.array(all_correlation)
+    snr_improvements = result_data['output_snrs'] - result_data['input_snrs']
+
+    num_samples = len(result_data['clean_signals'])
+
+    # 保存 result.npy
+    result_save_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "result.npy")
+    np.save(result_save_path, result_data)
+    print(f"\n  ✅ result.npy 已保存到 {result_save_path}")
+
+    # ---- 综合分析 ----
+    print("\n" + "=" * 60)
+    print("📊 最佳模型 (Epoch {}) 综合评估分析报告".format(best_epoch))
+    print("=" * 60)
+
+    print(f"\n[1] 基本参数")
+    print(f"  最佳Epoch: {best_epoch}")
+    print(f"  验证损失: {best_val_loss:.6f}")
+    print(f"  评估时间步: t={eval_t}")
+    print(f"  测试样本数: {num_samples}")
+    print(f"  信号长度: {result_data['clean_signals'].shape[1]}")
+
+    print(f"\n[2] SNR 分析 (dB)")
+    print(f"  输入SNR  - 均值: {np.mean(result_data['input_snrs']):.2f}  |  中位数: {np.median(result_data['input_snrs']):.2f}  |  标准差: {np.std(result_data['input_snrs']):.2f}")
+    print(f"  输出SNR  - 均值: {np.mean(result_data['output_snrs']):.2f}  |  中位数: {np.median(result_data['output_snrs']):.2f}  |  标准差: {np.std(result_data['output_snrs']):.2f}")
+    print(f"  SNR提升  - 均值: {np.mean(snr_improvements):.2f}  |  中位数: {np.median(snr_improvements):.2f}  |  标准差: {np.std(snr_improvements):.2f}")
+    print(f"            |  最小: {np.min(snr_improvements):.2f}  |  最大: {np.max(snr_improvements):.2f}")
+    pos_count = np.sum(snr_improvements > 0)
+    neg_count = np.sum(snr_improvements < 0)
+    print(f"  SNR提升>0 样本: {pos_count}/{num_samples} ({pos_count/num_samples*100:.1f}%)")
+    print(f"  SNR提升<0 样本: {neg_count}/{num_samples} ({neg_count/num_samples*100:.1f}%)")
+
+    print(f"\n[3] MSE 分析")
+    print(f"  MSE   - 均值: {np.mean(all_mse):.6f}  |  中位数: {np.median(all_mse):.6f}  |  标准差: {np.std(all_mse):.6f}")
+    print(f"         |  最小: {np.min(all_mse):.6f}  |  最大: {np.max(all_mse):.6f}")
+
+    print(f"\n[4] 相关系数分析")
+    print(f"  相关系数 - 均值: {np.mean(all_correlation):.4f}  |  中位数: {np.median(all_correlation):.4f}  |  标准差: {np.std(all_correlation):.4f}")
+    print(f"           |  最小: {np.min(all_correlation):.4f}  |  最大: {np.max(all_correlation):.4f}")
+    high_corr = np.sum(all_correlation > 0.9)
+    mid_corr = np.sum((all_correlation > 0.7) & (all_correlation <= 0.9))
+    low_corr = np.sum(all_correlation <= 0.7)
+    print(f"  相关系数 > 0.9: {high_corr}/{num_samples} ({high_corr/num_samples*100:.1f}%)")
+    print(f"  相关系数 0.7~0.9: {mid_corr}/{num_samples} ({mid_corr/num_samples*100:.1f}%)")
+    print(f"  相关系数 < 0.7: {low_corr}/{num_samples} ({low_corr/num_samples*100:.1f}%)")
+
+    # SNR 分布区间统计
+    print(f"\n[5] SNR提升分布")
+    bins = [(-float('inf'), -5), (-5, 0), (0, 5), (5, 10), (10, 20), (20, float('inf'))]
+    for lo, hi in bins:
+        if lo == -float('inf'):
+            label = f"  < {hi} dB"
+            count = np.sum(snr_improvements < hi)
+        elif hi == float('inf'):
+            label = f"  >= {lo} dB"
+            count = np.sum(snr_improvements >= lo)
+        else:
+            label = f"  {lo} ~ {hi} dB"
+            count = np.sum((snr_improvements >= lo) & (snr_improvements < hi))
+        print(f"{label}: {count}/{num_samples} ({count/num_samples*100:.1f}%)")
+
+    # 输出SNR分布区间
+    print(f"\n[6] 输出SNR分布")
+    bins = [(-float('inf'), 0), (0, 5), (5, 10), (10, 15), (15, 20), (20, float('inf'))]
+    for lo, hi in bins:
+        if lo == -float('inf'):
+            label = f"  < {hi} dB"
+            count = np.sum(result_data['output_snrs'] < hi)
+        elif hi == float('inf'):
+            label = f"  >= {lo} dB"
+            count = np.sum(result_data['output_snrs'] >= lo)
+        else:
+            label = f"  {lo} ~ {hi} dB"
+            count = np.sum((result_data['output_snrs'] >= lo) & (result_data['output_snrs'] < hi))
+        print(f"{label}: {count}/{num_samples} ({count/num_samples*100:.1f}%)")
+
+    # 保存分析报告到文本文件
+    report_path = "./logs_classic/analysis_report.txt"
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write("=" * 60 + "\n")
+        f.write(f"最佳模型 (Epoch {best_epoch}) 综合评估分析报告\n")
+        f.write("=" * 60 + "\n\n")
+        f.write(f"[1] 基本参数\n")
+        f.write(f"  最佳Epoch: {best_epoch}\n")
+        f.write(f"  验证损失: {best_val_loss:.6f}\n")
+        f.write(f"  评估时间步: t={eval_t}\n")
+        f.write(f"  测试样本数: {num_samples}\n\n")
+        f.write(f"[2] SNR 分析 (dB)\n")
+        f.write(f"  输入SNR  - 均值: {np.mean(result_data['input_snrs']):.2f}  中位数: {np.median(result_data['input_snrs']):.2f}  标准差: {np.std(result_data['input_snrs']):.2f}\n")
+        f.write(f"  输出SNR  - 均值: {np.mean(result_data['output_snrs']):.2f}  中位数: {np.median(result_data['output_snrs']):.2f}  标准差: {np.std(result_data['output_snrs']):.2f}\n")
+        f.write(f"  SNR提升  - 均值: {np.mean(snr_improvements):.2f}  中位数: {np.median(snr_improvements):.2f}  标准差: {np.std(snr_improvements):.2f}\n")
+        f.write(f"           最小: {np.min(snr_improvements):.2f}  最大: {np.max(snr_improvements):.2f}\n")
+        f.write(f"  SNR提升>0: {pos_count}/{num_samples} ({pos_count/num_samples*100:.1f}%)\n")
+        f.write(f"  SNR提升<0: {neg_count}/{num_samples} ({neg_count/num_samples*100:.1f}%)\n\n")
+        f.write(f"[3] MSE 分析\n")
+        f.write(f"  MSE - 均值: {np.mean(all_mse):.6f}  中位数: {np.median(all_mse):.6f}  标准差: {np.std(all_mse):.6f}\n")
+        f.write(f"       最小: {np.min(all_mse):.6f}  最大: {np.max(all_mse):.6f}\n\n")
+        f.write(f"[4] 相关系数分析\n")
+        f.write(f"  相关系数 - 均值: {np.mean(all_correlation):.4f}  中位数: {np.median(all_correlation):.4f}  标准差: {np.std(all_correlation):.4f}\n")
+        f.write(f"           最小: {np.min(all_correlation):.4f}  最大: {np.max(all_correlation):.4f}\n")
+        f.write(f"  > 0.9: {high_corr}/{num_samples} ({high_corr/num_samples*100:.1f}%)\n")
+        f.write(f"  0.7~0.9: {mid_corr}/{num_samples} ({mid_corr/num_samples*100:.1f}%)\n")
+        f.write(f"  < 0.7: {low_corr}/{num_samples} ({low_corr/num_samples*100:.1f}%)\n\n")
+        f.write(f"[5] 逐样本详细数据\n")
+        for i in range(num_samples):
+            f.write(f"  样本{i:3d}: 输入SNR={result_data['input_snrs'][i]:.2f}  输出SNR={result_data['output_snrs'][i]:.2f}  "
+                    f"SNR提升={snr_improvements[i]:+.2f}  MSE={all_mse[i]:.6f}  相关系数={all_correlation[i]:.4f}\n")
+    print(f"\n  ✅ 分析报告已保存到 {report_path}")
+
     # 可视化去噪结果
+    print(f"\n[7] 去噪可视化")
     visualize_denoising(
         model=best_model,
         test_loader=test_loader,
         params=params,
         device=device,
-        num_samples=3,
+        num_samples=10,
         save_path="./denoising_results_classic.png"
     )
+
+    print("\n" + "=" * 60)
+    print("✅ 全部训练及评估完成！")
+    print("=" * 60)
 
     return model, ema_model
 
