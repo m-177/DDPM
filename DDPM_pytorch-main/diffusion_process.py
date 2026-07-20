@@ -3,34 +3,8 @@ import torch
 import numpy as np
 from PIL import Image
 import torchvision.transforms as transforms
-import math
-
-
-# -----------------------------
-# Beta调度
-# -----------------------------
-def linear_beta_schedule(beta_start, beta_end, timesteps):
-    """线性beta调度"""
-    return torch.linspace(beta_start, beta_end, timesteps)
-
-
-def cosine_beta_schedule(timesteps, s=0.008):
-    """余弦beta调度"""
-    steps = timesteps + 1
-    x = torch.linspace(0, timesteps, steps)
-    alphas_cumprod = torch.cos(((x / timesteps) + s) / (1 + s) * math.pi * 0.5) ** 2
-    alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
-    betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
-    return torch.clip(betas, 0.0001, 0.9999)
-
-
-# -----------------------------
-# 计算理论 SNR
-# -----------------------------
-def calculate_theoretical_snr(alpha_bar):
-    """计算给定 ᾱ 时的理论信噪比 (dB)"""
-    snr = 10 * torch.log10(alpha_bar / (1 - alpha_bar + 1e-8))
-    return snr.item()
+from diffusion_utils import (linear_beta_schedule, cosine_beta_schedule,
+                              calculate_theoretical_snr)
 
 
 # -----------------------------

@@ -41,8 +41,7 @@ DDPM_pytorch-main/
 ├── baseline_methods.py           # 基线去噪方法（小波/中值滤波等）
 ├── run_ablation.py               # 消融实验运行脚本
 ├── run_ablation.bat              # 消融实验批处理
-├── generate_result.py            # 结果生成工具
-├── temp.py                       # CUDA 可用性测试
+├── diffusion_utils.py            # 共享扩散参数工具
 ├── requirements.txt              # Python 依赖
 ├── tests/                        # 单元测试
 │   ├── __init__.py
@@ -63,8 +62,9 @@ DDPM_pytorch-main/
 | `reverse_diffusion_process.py` | 反向扩散生成过程 |
 | `eval_multi_t.py` | 加载模型，在多个时间步（t=100~400）评估去噪效果 |
 | `evaluate_errors.py` | 检测去噪结果中的极性反转和波形丢失，支持自适应阈值 |
-| `baseline_methods.py` | 传统去噪方法对比（小波去噪、中值滤波等） |
+| `baseline_methods.py` | 传统去噪方法对比（小波去噪、维纳滤波等） |
 | `run_ablation.py` | 消融实验，验证各损失分量的贡献 |
+| `diffusion_utils.py` | 共享扩散参数工具（beta 调度、SNR 计算、参数预计算） |
 | `uwb_signal_generate.py` | 基于高斯二阶导的 UWB 信号生成器 |
 
 ## 如何运行项目

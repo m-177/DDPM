@@ -81,3 +81,158 @@
 
 该脚本不使用 DDPM 模型，而是直接对干净信号加随机噪声和扰动来生成 `result.npy`。现有的 `result.npy`（16MB）可能是由此脚本生成的占位数据，不代表真实的模型去噪效果。评估时应使用 `evaluate_errors.py` 直接从模型计算。
 
+---
+
+### [P0] 修复 `interpolate.py` 逆向扩散 Off-by-One 错误
+
+**文件**: `DDPM_pytorch-main/interpolate.py` — `reverse_diffusion()` 函数 (L68-L99)
+
+**问题描述**:
+与 `train.py` 中 `denoise_for_eval` 完全相同的 off-by-one 错误。逆向扩散循环 `range(start_step, 0, -1)` 从 `start_step` 递减到 1，但所有数组索引使用 `t - 1`，导致模型接收的时间步比实际噪声水平少 1。
+
+同时前向扩散 `interpolate()` 函数 (L125) 和 `__main__` (L304) 中使用 `alphas_cumprod[interp_steps - 1]`，与逆向起始步不一致。
+
+**修改内容**（6 处 `t - 1` → `t` + 3 处配套修改）:
+
+| 行 | 修改前 | 修改后 |
+|----|--------|--------|
+| 67 | (无) | `start_step = min(start_step, len(betas) - 1)` 安全钳位 |
+| 70 | `torch.full(..., t - 1, ...)` | `torch.full(..., t, ...)` |
+| 76 | `alphas[t - 1]` | `alphas[t]` |
+| 77 | `alphas_cumprod[t - 1]` | `alphas_cumprod[t]` |
+| 78 | `alphas_cumprod_prev[t - 1]` | `alphas_cumprod_prev[t]` |
+| 79 | `betas[t - 1]` | `betas[t]` |
+| 95 | `posterior_variance[t - 1]` | `posterior_variance[t]` |
+| 125-126 | `alphas_cumprod[interp_steps - 1]` | `interp_t = min(interp_steps, len(alphas_cumprod) - 1)` + `alphas_cumprod[interp_t]` |
+| 304 | `alphas_cumprod[args.interp_steps - 1]` | `interp_t = min(args.interp_steps, args.timesteps - 1)` + `alphas_cumprod[interp_t]` |
+
+**影响范围**: `interpolate.py` 的逆向扩散和插值功能。此前该脚本的去噪结果均存在系统性偏差。
+
+---
+
+### [P2] 补充 `requirements.txt` 缺失依赖
+
+**文件**: `DDPM_pytorch-main/requirements.txt`
+
+**问题描述**:
+`pip install -r requirements.txt` 在新环境中会因缺少 `psutil` 和 `PyWavelets` 导致运行时 ImportError：
+- `psutil`：`train.py` 中 `MemoryMonitor` 类依赖，训练启动即崩溃
+- `PyWavelets`（`pywt`）：`baseline_methods.py` 中小波去噪依赖
+
+**修改内容**:
+新增两行：
+```
+psutil             7.0.0
+PyWavelets         1.8.0
+```
+
+---
+
+### [P2] 重构 `requirements.txt` 为标准 pip 格式
+
+**文件**: `DDPM_pytorch-main/requirements.txt`
+
+**问题描述**:
+原文件为 `pip freeze` 的原始输出（40 行），包含大量传递依赖（certifi、urllib3 等）、打包工具（pip、setuptools）和系统特定包（mkl-*），且使用空格分隔格式，不够规范。
+
+**修改内容**:
+精简为 11 行直接依赖，统一 `package==version` 格式：
+```
+numpy==1.26.4
+matplotlib==3.10.8
+torch==1.12.1
+torchaudio==0.12.1
+torchvision==0.13.1
+tqdm==4.67.3
+scipy==1.15.3
+scikit-image==0.25.2
+pillow==11.1.0
+psutil==7.0.0
+PyWavelets==1.8.0
+```
+
+---
+
+### [Clean] 清理冗余文件
+
+清理了 7 个冗余文件 + 2 个缓存目录，回收约 30 MB：
+
+| 文件 | 大小 | 原因 |
+|------|------|------|
+| `result.npy`（根目录） | 12 MB | 未跟踪，假数据 |
+| `DDPM_pytorch-main/result.npy` | 16 MB | `generate_result.py` 生成的假数据 |
+| `DDPM_pytorch-main/error_report.txt` | 655 KB | P0 修复前的过期评估报告 |
+| `DDPM_pytorch-main/denoising_results_classic.png` | 1 MB | P0 修复前的过期可视化 |
+| `DDPM_pytorch-main/check_cuda.txt` | 1 KB | `temp.py` 的过期输出 |
+| `DDPM_pytorch-main/temp.py` | 73 B | 仅 3 行 CUDA 检测，无实际用途 |
+| `DDPM_pytorch-main/.gi` | 12 B | 垃圾文件 |
+| `DDPM_pytorch-main/__pycache__/` | — | 含已删除脚本的残留 .pyc |
+| `DDPM_pytorch-main/tests/__pycache__/` | — | 过期测试缓存 |
+
+---
+
+## 2026-07-20（优化轮次）
+
+### [Refactor] 提取共享扩散参数工具到 `diffusion_utils.py`
+
+**新建文件**: `DDPM_pytorch-main/diffusion_utils.py`
+
+消除 `linear_beta_schedule`（4 处重复）、`cosine_beta_schedule`（4 处重复）、`calculate_theoretical_snr`（3 处重复）、`compute_diffusion_params`（2 处重复）的重复定义。
+
+**修改文件**:
+
+| 文件 | 修改 |
+|------|------|
+| `train.py` | 移除本地定义（-29 行），从 `diffusion_utils` 导入；移除未使用的 `import math` |
+| `reverse_diffusion_process.py` | 移除本地定义（-19 行），从 `diffusion_utils` 导入 |
+| `interpolate.py` | 移除本地定义（-32 行），从 `diffusion_utils` 导入；移除未使用的 `import math` 和 `torch.nn.functional as F` |
+| `diffusion_process.py` | 移除本地定义（-22 行），从 `diffusion_utils` 导入 |
+
+### [P1] 修复 `train()` 函数默认参数
+
+**文件**: `DDPM_pytorch-main/train.py` — `train()` 函数签名 (L879-L884)
+
+函数默认值与 `__main__` 实际传入的定版配置不一致：
+
+| 参数 | 修改前（默认） | 修改后（定版） |
+|------|:---:|:---:|
+| `lambda_mse` | 2.0 | **2.5** |
+| `lambda_rel` | 0.5 | **0.4** |
+| `num_workers` | 4 | **1** |
+
+### [P1] 修复 `run_ablation.py` 配置
+
+**文件**: `DDPM_pytorch-main/run_ablation.py`
+
+| 修改项 | 修改前 | 修改后 |
+|------|------|------|
+| `baseline` 实验 | MSE=1.5, Peak=3.5（标签"定版配置"但不对） | MSE=2.5, Peak=1.8（真正的定版配置） |
+| `old_weights` 实验 | MSE=2.5, Peak=1.8（标签"旧权重"） | MSE=1.5, Peak=3.5（真正的旧权重） |
+| `no_peak`/`no_corr` MSE | 1.5（与定版不一致） | 2.5（与定版一致） |
+| `num_workers` | 0 | 1（与主训练对齐） |
+| `save_every` | 50 | 10（与主训练对齐） |
+
+### [P2] 添加主训练 `set_seed()` 调用
+
+**文件**: `DDPM_pytorch-main/train.py` — `__main__` (L1642)
+
+训练启动前添加 `set_seed(42)`，确保两次相同参数的训练结果可复现。
+
+### [P2] 修复 `save_report()` docstring 位置
+
+**文件**: `DDPM_pytorch-main/evaluate_errors.py` — `save_report()` (L609-613)
+
+docstring 从 `if` 块之后移至函数签名下一行（PEP 257）。
+
+### [P2] 添加 `generate_result.py` 的 `if __name__ == '__main__'` 保护
+
+**文件**: `DDPM_pytorch-main/generate_result.py`
+
+整文件模块级代码改为 `if __name__ == "__main__":` 块内，防止被 import 时意外执行。
+
+### [P2] 移除 `baseline_methods.py` 死代码
+
+**文件**: `DDPM_pytorch-main/baseline_methods.py` (L44-50)
+
+移除 `calc_metrics()` 函数（定义后从未调用，且引用外层未定义变量 `noisy`）。
+

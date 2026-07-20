@@ -41,14 +41,6 @@ noisy_signals = np.sqrt(alpha_bar) * clean_signals + np.sqrt(1 - alpha_bar) * no
 clean_signals = clean_signals.squeeze(1)      # (100, 10120)
 noisy_signals = noisy_signals.squeeze(1)       # (100, 10120)
 
-def calc_metrics(clean, denoised):
-    """计算 SNR 提升和相关系数"""
-    in_snr = 10 * np.log10(np.mean(clean**2) / (np.mean((noisy - clean)**2) + 1e-10))
-    out_snr = 10 * np.log10(np.mean(clean**2) / (np.mean((denoised - clean)**2) + 1e-10))
-    snr_imp = out_snr - in_snr
-    corr = np.corrcoef(clean.flatten(), denoised.flatten())[0, 1]
-    return in_snr, out_snr, snr_imp, corr
-
 def calc_per_sample(clean_set, denoised_set):
     """逐样本计算指标，返回均值和标准差"""
     snr_imps, corrs = [], []

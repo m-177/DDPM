@@ -607,10 +607,10 @@ def visualize_error_samples(clean_signal, noisy_signal, denoised_signal,
 # 5. 保存详细报告到文本文件
 # -----------------------------
 def save_report(results, save_path=None):
+    """将评估结果保存到文本文件"""
     if save_path is None:
         # 默认保存到 evaluate_errors.py 所在目录
         save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "error_report.txt")
-    """将评估结果保存到文本文件"""
     with open(save_path, 'w', encoding='utf-8') as f:
         f.write("=" * 70 + "\n")
         f.write("去噪错误评估报告\n")

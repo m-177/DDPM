@@ -12,12 +12,13 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import copy
-import math
 import psutil
 import gc
 import signal
 from Dataset import (Dataset_UWB, DEFAULT_SPLIT_SEED, create_split_indices,
                      create_split_metadata, validate_split_indices)
+from diffusion_utils import (linear_beta_schedule, cosine_beta_schedule,
+                              compute_diffusion_params)
 
 
 # -----------------------------
@@ -575,38 +576,6 @@ class EMA:
 
 
 # -----------------------------
-# 6. Beta调度
-# -----------------------------
-def linear_beta_schedule(beta_start, beta_end, timesteps):
-    return torch.linspace(beta_start, beta_end, timesteps)
-
-
-def cosine_beta_schedule(timesteps, s=0.008):
-    steps = timesteps + 1
-    x = torch.linspace(0, timesteps, steps)
-    alphas_cumprod = torch.cos(((x / timesteps) + s) / (1 + s) * math.pi * 0.5) ** 2
-    alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
-    betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
-    return torch.clip(betas, 0.0001, 0.9999)
-
-
-def compute_diffusion_params(betas, device):
-    betas = betas.to(device)
-    alphas = 1 - betas
-    alphas_cumprod = torch.cumprod(alphas, dim=0)
-    alphas_cumprod_prev = torch.nn.functional.pad(alphas_cumprod[:-1], (1, 0), value=1.)
-    posterior_variance = betas * (1 - alphas_cumprod_prev) / (1 - alphas_cumprod)
-
-    return {
-        'betas': betas,
-        'alphas': alphas,
-        'alphas_cumprod': alphas_cumprod,
-        'alphas_cumprod_prev': alphas_cumprod_prev,
-        'posterior_variance': posterior_variance,
-    }
-
-
-# -----------------------------
 # 7. 检查点保存与恢复（暂停/继续功能）
 # -----------------------------
 CHECKPOINT_PATH = "./saved_models_classic/training_checkpoint.pth"
@@ -907,12 +876,12 @@ def train(
         save_every=10,
         device='cuda',
         snr_eval_freq=10,
-        lambda_mse=2.0,
-        lambda_rel=0.5,
+        lambda_mse=2.5,
+        lambda_rel=0.4,
         lambda_peak=1.8,
         lambda_corr=1.8,
         dropout_rate=0.1,
-        num_workers=4,
+        num_workers=1,
         memory_check_freq=10,
         resume_from=None,
         gradient_accumulation_steps=1,
@@ -1670,6 +1639,7 @@ def train(
 # -----------------------------
 
 if __name__ == "__main__":
+    set_seed(42)
     print("启动经典DDPM训练...")
     print(f"PyTorch版本: {torch.__version__}")
     print(f"CUDA可用: {torch.cuda.is_available()}")
