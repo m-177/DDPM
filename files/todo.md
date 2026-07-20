@@ -49,7 +49,18 @@ python uwb_signal_generate.py
 
 ---
 
-### 第 2 步：多时间步评估
+### 第 2 步：训练模型
+
+```bash
+python train.py
+```
+
+- 产出：`saved_models_classic/` 下模型权重 + `logs_classic/` 下训练日志
+- ⏱ 数小时（600 epoch 上限，SNR 收敛自动早停）
+
+---
+
+### 第 3 步：多时间步评估
 
 ```bash
 python eval_multi_t.py
@@ -57,11 +68,12 @@ python eval_multi_t.py
 
 - 产出：`logs_classic/multi_t_eval_fine.txt` + `logs_classic/multi_t_viz_fine/` 下 12 张图
 - 用途：更新 paper.md 的 §5.1（主结果表）和 §5.2（多时间步表）
+- ⚠️ 跑完后将 t=300 的指标更新到 `baseline_methods.py:150-151`
 - ⏱ ~5 分钟
 
 ---
 
-### 第 3 步：错误分析
+### 第 4 步：错误分析
 
 ```bash
 python evaluate_errors.py --visualize --max_viz 5
@@ -73,13 +85,13 @@ python evaluate_errors.py --visualize --max_viz 5
 
 ---
 
-### 第 4 步：基线方法对比
+### 第 5 步：基线方法对比
 
 ```bash
 python baseline_methods.py
 ```
 
-> ⚠️ 跑完后需把脚本末尾硬编码的 DDPM 行替换为第 2 步的新结果
+> 前提：第 3 步完成后已将 t=300 指标更新到 `baseline_methods.py:150-151`
 
 - 产出：`logs_classic/baseline_comparison.txt`
 - 用途：更新 paper.md 的 §8（方法对比表）
@@ -87,7 +99,7 @@ python baseline_methods.py
 
 ---
 
-### 第 5 步：消融实验（4 组）
+### 第 6 步：消融实验（4 组）
 
 ```bash
 python run_ablation.py
@@ -101,7 +113,7 @@ python run_ablation.py
 
 ---
 
-### 第 6 步：更新 paper.md
+### 第 7 步：更新 paper.md
 
 将所有新结果填入 `files/paper.md` 对应章节。
 
@@ -112,13 +124,15 @@ python run_ablation.py
 | 步骤 | 命令 | 时间 | 更新 paper.md |
 |:---:|------|:---:|:---:|
 | 1 | `python uwb_signal_generate.py` | <1min | — |
-| 2 | `python eval_multi_t.py` | ~5min | §5.1, §5.2 |
-| 3 | `python evaluate_errors.py --visualize` | ~3min | §6.1, §6.3 |
-| 4 | `python baseline_methods.py` | ~2min | §8 |
-| 5 | `python run_ablation.py` | 数小时 | §7 |
-| 6 | 手动编辑 `files/paper.md` | ~10min | 全文 |
+| 2 | `python train.py` | 数小时 | — |
+| 3 | `python eval_multi_t.py` | ~5min | §5.1, §5.2 |
+| — | 更新 `baseline_methods.py:150-151` | <1min | — |
+| 4 | `python evaluate_errors.py --visualize` | ~3min | §6.1, §6.3 |
+| 5 | `python baseline_methods.py` | ~2min | §8 |
+| 6 | `python run_ablation.py` | 数小时 | §7 |
+| 7 | 手动编辑 `files/paper.md` | ~10min | 全文 |
 
-> 第 2、3、4 步互不依赖，可同时跑；第 5 步最耗时。
+> 第 3、4、5 步互不依赖，可同时跑；第 6 步最耗时。
 
 ---
 
