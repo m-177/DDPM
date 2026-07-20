@@ -45,3 +45,39 @@
 
 **影响范围**: `denoise_for_eval` 被 `evaluate_checkpoint`、`visualize_denoising`、SNR 评估、`eval_multi_t.py`、`evaluate_errors.py` 调用，统一后训练与推理行为一致。
 
+---
+
+### [Doc] 更新 README.md
+
+**文件**: `DDPM_pytorch-main/README.md`
+
+**修改内容**:
+- 修复开头多余的 "111" 字符
+- 更新文件结构树，反映当前实际文件（新增 `eval_multi_t.py`、`evaluate_errors.py`、`baseline_methods.py`、`run_ablation.py`、`tests/`）
+- 移除已删除文件（`check_data_leakage.py`、`check_structure.py`）
+- 新增数据集划分设计说明（无泄露验证）
+- 新增运行测试说明
+- 更新评估体系描述
+
+---
+
+### [P1] 修复 `reverse_diffusion_process.py` 两处问题
+
+**文件**: `DDPM_pytorch-main/reverse_diffusion_process.py`
+
+**问题1** — Clamp 不一致 (L104):
+| 修改前 | 修改后 |
+|--------|--------|
+| `torch.clamp(pred_x0, -1.2, 1.2)` | `torch.clamp(pred_x0, -1, 1)` |
+
+**问题2** — 模型架构不兼容 (L273-281):
+- 旧代码使用 `DenoiseUNet`（`models.py` 中的 `ImprovedDenoiseUNet1D`）
+- 但 `train.py` 训练使用的是 `SimpleUNet1D_Classic`，两者架构不同，导致无法加载训练好的权重
+- 修复：1D 模式下改用 `SimpleUNet1D_Classic`（从 `train.py` 导入），2D 模式保留 `DenoiseUNet` 作为兼容
+
+### [Note] `generate_result.py` 生成的是假数据
+
+**文件**: `DDPM_pytorch-main/generate_result.py`
+
+该脚本不使用 DDPM 模型，而是直接对干净信号加随机噪声和扰动来生成 `result.npy`。现有的 `result.npy`（16MB）可能是由此脚本生成的占位数据，不代表真实的模型去噪效果。评估时应使用 `evaluate_errors.py` 直接从模型计算。
+

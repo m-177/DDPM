@@ -1,96 +1,163 @@
 # 项目待办事项与后续计划
 
-> 更新时间：2026-06-15
-
-## 当前基线（最终定版）
-
-| 指标 | 值 |
-|------|-----|
-| 最佳 Epoch | 440 / 600（SNR 收敛自动停） |
-| SNR 提升均值 | +13.59 dB |
-| SNR 提升范围 | +11.04 ~ +17.13 dB |
-| 相关系数均值 | 0.809 |
-| 相关系数 > 0.7 | 82% |
-| 相关系数 > 0.9 | 12% |
-| MSE 均值 | 0.0098 |
-| 极性反转 | 0%（完全消除） |
-| 波形严重丢失 | 15.9%（81.9% 脉冲正常） |
+> 最后更新：2026-07-20
 
 ---
 
-## 已完成
+## ⚠️ 重要：Bug 修复导致历史数据需重跑
 
-### 训练框架
-- [x] UWB 信号生成器 + 信号特性分析（带宽 0.5~1.5 GHz，相对带宽 96%）
-- [x] 1D UNet 模型设计（SimpleUNet1D_Classic，~2M 参数）
-- [x] 混合损失函数（MSE + RelMSE + Peak-Aware + Peak-Corr）
-- [x] EMA + CosineAnnealingLR + 梯度裁剪
-- [x] 训练暂停/恢复（Ctrl+C 自动保存检查点）
-- [x] SNR 收敛自动停止（SNR_PATIENCE=4）+ Loss 早停安全网（patience=200）
-- [x] 双模型评估对比（best_by_loss vs best_by_snr）
-- [x] 输出目录参数化（`output_dir`，消融实验用）
-- [x] 数据固定种子（np.random.seed(42)，确保划分一致）
-
-### 参数调优
-- [x] batch=8, lr=2e-4 定版（batch=16+lr=5e-4 震荡，batch=2 梯度不稳）
-- [x] 损失权重定版：**MSE=2.5, RelMSE=0.4, Peak=1.8, Corr=1.8**（消融验证最优）
-- [x] 数据量结论：1000 条够用，5000 条模型容量瓶颈
-
-### 消融实验（固定种子，4 组，见 logggg.md 2026-06-12）
-- [x] 完整配置（MSE=2.5, Peak=1.8, Corr=1.8）
-- [x] 移除 Peak-Corr（Corr=0）：SNR -0.61 dB
-- [x] 移除 Peak-Aware（Peak=0）：>0.9 样本 12→3
-- [x] MSE 降权（2.5→1.5）：SNR -0.22 dB
-
-### 评估体系
-- [x] 波形丢失分级评估（自适应阈值 + 形状双判 + 四级分级）
-- [x] `evaluate_errors.py` 兼容新旧 result.npy 格式
-- [x] `eval_multi_t.py` 多时间步泛化评估
-- [x] 多 t 精细评估（100~400，每 20 步）
-- [x] 极性反转评估（0%）
-
-### 文档
-- [x] `logggg.md` 训练日志汇总（4 次主要训练）
-- [x] `change.md` 代码变更记录
-- [x] `paper.md` 论文数据汇总
-- [x] `todo.md` 待办事项
+2026-07-20 发现并修复了 `denoise_for_eval` 的 off-by-one 错误和 clamp 不一致问题。**训练过程不受影响（模型权重有效）**，但所有基于该函数的评估指标均不准确，需重新跑评估脚本。
 
 ---
 
-## 论文待完成
+## 一、Bug 修复状态
+
+| # | 问题 | 文件 | 状态 |
+|---|------|------|:---:|
+| P0 | `denoise_for_eval` 逆向扩散 off-by-one（`t_idx-1` → `t_idx`） | `train.py:331-351` | ✅ |
+| P1 | Clamp 不一致 `[-1.2,1.2]` → `[-1,1]` | `train.py:343` | ✅ |
+| P1 | Clamp 不一致 `[-1.2,1.2]` → `[-1,1]` | `reverse_diffusion_process.py:104` | ✅ |
+| P1 | 模型架构不兼容（1D: `DenoiseUNet` → `SimpleUNet1D_Classic`） | `reverse_diffusion_process.py:273-288` | ✅ |
+| P2 | `generate_result.py` 生成的是假数据（随机扰动，非模型输出） | `generate_result.py` | ⚠️ 已知 |
+| P2 | `requirements.txt` 格式不规范，缺少 PyWavelets、psutil 等 | `requirements.txt` | 🔲 |
+| P2 | `baseline_methods.py:150` 硬编码旧 DDPM 数据 `+13.59 dB` | `baseline_methods.py` | 🔲 待重跑后更新 |
+| P1 | `psutil` 未列入 `requirements.txt`，新环境 `pip install -r` 会崩溃 | `requirements.txt` | 🔲 |
+| P2 | 训练循环未调用 `set_seed()`，两次相同参数训练结果不可复现 | `train.py` | 🔲 |
+| P2 | `save_report()` docstring 位置错误（在 `if` 块之后） | `evaluate_errors.py:613` | 🔲 |
+| P2 | `run_ablation.py` 与主训练参数不一致（`num_workers=0` vs `1`, `save_every=50` vs `10`） | `run_ablation.py` | 🔲 |
+| P2 | 扩散参数计算三份重复实现（`train.py` / `reverse_diffusion_process.py` / `interpolate.py`） | 三文件 | 🔲 |
+| P3 | `interpolate.py` 同样使用旧模型架构 `DenoiseUNet` | `interpolate.py` | 🔲 低优先级 |
+| P3 | `generate_result.py` 缺少 `if __name__ == '__main__'` 保护 | `generate_result.py` | 🔲 |
+| P3 | `baseline_methods.py` 中 `calc_metrics` 函数定义后从未调用（死代码） | `baseline_methods.py:44` | 🔲 |
+
+---
+
+## 二、需要重新做的工作（按顺序）
+
+> 所有命令均在 `DDPM_pytorch-main/` 目录下运行
+
+### 第 1 步：生成数据
+
+```bash
+python uwb_signal_generate.py
+```
+
+- 产出：`uwb_signals_time_clean.npy`（1000 条 × 10120 采样点）
+- ⏱ < 1 分钟
+
+---
+
+### 第 2 步：多时间步评估
+
+```bash
+python eval_multi_t.py
+```
+
+- 产出：`logs_classic/multi_t_eval_fine.txt` + `logs_classic/multi_t_viz_fine/` 下 12 张图
+- 用途：更新 paper.md 的 §5.1（主结果表）和 §5.2（多时间步表）
+- ⏱ ~5 分钟
+
+---
+
+### 第 3 步：错误分析
+
+```bash
+python evaluate_errors.py --visualize --max_viz 5
+```
+
+- 产出：`error_report.txt` + `error_vis/` 下错误样本图
+- 用途：更新 paper.md 的 §6.1（极性反转）和 §6.3（波形丢失）
+- ⏱ ~3 分钟
+
+---
+
+### 第 4 步：基线方法对比
+
+```bash
+python baseline_methods.py
+```
+
+> ⚠️ 跑完后需把脚本末尾硬编码的 DDPM 行替换为第 2 步的新结果
+
+- 产出：`logs_classic/baseline_comparison.txt`
+- 用途：更新 paper.md 的 §8（方法对比表）
+- ⏱ ~2 分钟
+
+---
+
+### 第 5 步：消融实验（4 组）
+
+```bash
+python run_ablation.py
+```
+
+> 4 组 × 600 epoch 上限，SNR 收敛会自动早停。最耗时，建议最后跑或挂机。
+
+- 产出：`ablation_results/{baseline,no_peak,no_corr,old_weights}/logs_classic/analysis_report.txt`
+- 用途：更新 paper.md 的 §7（消融实验表）
+- ⏱ 数小时
+
+---
+
+### 第 6 步：更新 paper.md
+
+将所有新结果填入 `files/paper.md` 对应章节。
+
+---
+
+## 三、操作汇总
+
+| 步骤 | 命令 | 时间 | 更新 paper.md |
+|:---:|------|:---:|:---:|
+| 1 | `python uwb_signal_generate.py` | <1min | — |
+| 2 | `python eval_multi_t.py` | ~5min | §5.1, §5.2 |
+| 3 | `python evaluate_errors.py --visualize` | ~3min | §6.1, §6.3 |
+| 4 | `python baseline_methods.py` | ~2min | §8 |
+| 5 | `python run_ablation.py` | 数小时 | §7 |
+| 6 | 手动编辑 `files/paper.md` | ~10min | 全文 |
+
+> 第 2、3、4 步互不依赖，可同时跑；第 5 步最耗时。
+
+---
+
+## 四、论文待完成
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🔴 | 传统方法对比 | 小波去噪 + 维纳滤波，跑脚本无需训练 |
-| 🔴 | 精细多 t 评估 | `python eval_multi_t.py`（已改好，待跑） |
-| 🔴 | 波形错误可视化 | `python evaluate_errors.py --visualize` |
-| 🟡 | 按 SNR 分桶分析 | 定位模型在各 SNR 区间的表现差异 |
-| 🟡 | 训练曲线整理 | old_weights 的 `training_curves.png` |
-| 🟢 | 模型架构图 | 手绘或 draw.io |
-| 🟢 | 去噪前后频谱对比（FFT）| 补充频域视角 |
+| 🔴 | 按 SNR 分桶分析 | 定位模型在各 SNR 区间的表现差异 |
+| 🔴 | 模型架构图 | 手绘或 draw.io |
+| 🟡 | 去噪前后频谱对比（FFT） | 补充频域视角 |
+| 🟡 | 撰写方法部分 | DDPM 原理 + UNet 架构 + 损失函数 |
+| 🟡 | 撰写实验部分 | 数据描述 + 主结果 + 消融 + 多 t + 错误分析 |
 
 ---
 
-## 短期计划
+## 五、已完成
 
-### 论文
-- [ ] 传统方法对比（小波去噪、维纳滤波）
-- [ ] 撰写方法部分（DDPM 原理 + UNet 架构 + 损失函数设计）
-- [ ] 撰写实验部分（数据描述 + 主结果 + 消融 + 多 t + 错误分析）
-
-### 真实数据验证
-- [ ] 解析 `rx_fullframe_iq.mat`（实际 UWB 测量数据）
-- [ ] IQ 复数→幅度转换，匹配模型输入格式
-- [ ] 用定版模型去噪，定性分析效果
+- [x] UWB 信号生成器 + 信号特性分析
+- [x] 1D UNet 模型设计（SimpleUNet1D_Classic，~2M 参数）
+- [x] 混合损失函数（MSE + RelMSE + Peak-Aware + Peak-Corr）
+- [x] EMA + CosineAnnealingLR + 梯度裁剪
+- [x] 训练暂停/恢复 + SNR 收敛自动停止 + Loss 早停
+- [x] 双模型评估对比（best_by_loss vs best_by_snr）
+- [x] 损失权重定版：MSE=2.5, RelMSE=0.4, Peak=1.8, Corr=1.8
+- [x] 波形丢失分级评估（自适应阈值 + 形状双判 + 四级分级）
+- [x] 多 t 精细评估（100~400，每 20 步）
+- [x] 数据集划分验证（互斥 + 完整覆盖）
+- [x] P0/P1 Bug 修复（off-by-one + clamp）
+- [x] Git 重构提交（DDPM_pytorch-main/）
+- [x] README 更新
 
 ---
 
-## 中期计划
+## 六、中期计划
 
 - [ ] DDIM 加速采样（推理时间步 1000 → 50）
 - [ ] 增大模型容量（Mid 256→512 或加 Self-Attention）
 - [ ] 配置参数外置（YAML 配置文件）
-- [ ] 单元测试
+- [ ] 真实 UWB 数据验证（`rx_fullframe_iq.mat`）
+- [ ] 将 `SimpleUNet1D_Classic` 提取到 `models.py` 统一管理
+- [ ] 清理残留文件（`.gi`、`denoising_results_classic.png`、`check_cuda.txt` 等）
 
 ---
 
@@ -98,7 +165,6 @@
 
 1. **定版配置**：batch=8, lr=2e-4, MSE=2.5, Peak=1.8, Corr=1.8
 2. **消融已证实**：Corr 最关键，Peak 影响最佳样本，MSE 不应降权
-3. **不要盲目加数据**：1000 条对当前模型够用
-4. **变更记录**：每次改动同步更新 `change.md`
-5. **训练日志**：每次训练后更新 `logggg.md`
-6. **论文数据**：更新 `paper.md`
+3. **Bug 修复后**：所有评估脚本需重新运行，但模型不需要重新训练
+4. **变更记录**：每次改动同步追加 `files/update_7`
+5. **论文数据**：更新 `files/paper.md`

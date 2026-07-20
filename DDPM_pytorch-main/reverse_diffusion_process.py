@@ -101,7 +101,7 @@ def reverse_diffusion(model, x_t, params, device, save_intermediate=True,
         pred_x0 = (x - torch.sqrt(1 - alpha_bar_t) * predicted_noise) / torch.sqrt(alpha_bar_t)
 
         if clamp_x0:
-            pred_x0 = torch.clamp(pred_x0, -1.2, 1.2)
+            pred_x0 = torch.clamp(pred_x0, -1, 1)
 
         # 注意：BPSK信号本身有正有负，无法从信号本身判断极性是否反了
         # 因此不在推理时做极性校正，而是通过训练时的损失函数来防止极性翻转
@@ -270,15 +270,24 @@ if __name__ == "__main__":
     # 初始化模型
     print(f"\n加载模型: {args.weights}")
 
-    # 使用 DenoiseUNet 模型
-    model = DenoiseUNet(
-        in_channels=1,
-        out_channels=1,
-        ch=64,
-        droprate=0.1,
-        device=args.device,
-        data_dim=args.data_dim
-    ).to(args.device)
+    # 根据数据维度选择对应模型（1D 使用 train.py 中的 SimpleUNet1D_Classic，与训练一致）
+    if args.data_dim == '1d':
+        from train import SimpleUNet1D_Classic
+        model = SimpleUNet1D_Classic(
+            in_channels=1,
+            out_channels=1,
+            dropout_rate=0.1
+        ).to(args.device)
+    else:
+        from models import DenoiseUNet
+        model = DenoiseUNet(
+            in_channels=1,
+            out_channels=1,
+            ch=64,
+            droprate=0.1,
+            device=args.device,
+            data_dim=args.data_dim
+        ).to(args.device)
 
     try:
         checkpoint = torch.load(args.weights, map_location=args.device)
