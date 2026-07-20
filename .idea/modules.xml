@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/DDPM_pytorch-main.iml" filepath="$PROJECT_DIR$/.idea/DDPM_pytorch-main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/uwb_signal_first_add.iml" filepath="$PROJECT_DIR$/.idea/uwb_signal_first_add.iml" />
     </modules>
   </component>
 </project>

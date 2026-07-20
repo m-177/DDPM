@@ -1,0 +1,47 @@
+# update_7 - 项目修改记录
+
+---
+
+## 2026-07-20
+
+### [P0] 修复 `denoise_for_eval` 逆向扩散 Off-by-One 错误
+
+**文件**: `DDPM_pytorch-main/train.py` — `denoise_for_eval()` 函数 (L330-L356)
+
+**问题描述**:
+逆向扩散循环中，所有数组索引均使用 `t_idx - 1`，导致模型接收的时间步与实际噪声水平差 1 位。
+
+训练时加噪公式为 `x_t = sqrt(alphas_cumprod[t]) * x0 + sqrt(1-alphas_cumprod[t]) * noise`，模型学习映射 `(x_t, t) → noise`（t ∈ [0, 999]）。但推理循环第一步（t_idx=300）却将 `t_idx - 1 = 299` 传入模型，且使用 `alphas_cumprod[299]` 计算 pred_x0，与实际的 `alphas_cumprod[300]` 噪声水平不匹配。
+
+**修改内容**（6 处 `t_idx - 1` → `t_idx`）:
+
+| 行 | 修改前 | 修改后 |
+|----|--------|--------|
+| 333 | `torch.full(..., t_idx - 1, ...)` | `torch.full(..., t_idx, ...)` |
+| 337 | `alphas[t_idx - 1]` | `alphas[t_idx]` |
+| 338 | `alphas_cumprod[t_idx - 1]` | `alphas_cumprod[t_idx]` |
+| 339 | `alphas_cumprod_prev[t_idx - 1]` | `alphas_cumprod_prev[t_idx]` |
+| 340 | `betas[t_idx - 1]` | `betas[t_idx]` |
+| 351 | `posterior_variance[t_idx - 1]` | `posterior_variance[t_idx]` |
+
+**影响范围**: 所有依赖 `denoise_for_eval` 的评估（`evaluate_checkpoint`、`visualize_denoising`、SNR 监控、`eval_multi_t.py`、`evaluate_errors.py`），修复后会随函数定义自动生效。
+
+**备注**: 此前所有基于该函数的评估指标均不准确，需重新训练和评估。
+
+---
+
+### [P1] 修复训练/推理 Clamp 范围不一致
+
+**文件**: `DDPM_pytorch-main/train.py` — `denoise_for_eval()` 函数 (L343)
+
+**问题描述**:
+训练和验证阶段 `pred_clean` 的 clamp 范围为 `[-1, 1]`，而推理函数 `denoise_for_eval` 中 `pred_x0` 的 clamp 范围为 `[-1.2, 1.2]`。这种不一致会导致训练-推理分布偏移：模型在训练时从未见过超出 [-1, 1] 的输出，但推理时却允许 ±1.2 的值通过。
+
+**修改内容**:
+
+| 行 | 修改前 | 修改后 |
+|----|--------|--------|
+| 343 | `torch.clamp(pred_x0, -1.2, 1.2)` | `torch.clamp(pred_x0, -1, 1)` |
+
+**影响范围**: `denoise_for_eval` 被 `evaluate_checkpoint`、`visualize_denoising`、SNR 评估、`eval_multi_t.py`、`evaluate_errors.py` 调用，统一后训练与推理行为一致。
+
